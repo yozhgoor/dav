@@ -17,3 +17,36 @@ curl -i http://127.0.0.1:3000/health
 ```
 
 You should receive a `200 OK`.
+
+### Create a contact
+
+You can create a new contact using the following command:
+```
+curl -X POST http://127.0.0.1:3000/contacts \
+    -H "Content-Type: application/json" \
+    -d '{"id":"123", "name":"John Doe", "email":john@example.com", "phone":"123456789"}'
+```
+
+### Retrieve a contact using his id
+
+To retrieve a contact, you can use the following:
+```
+curl http://127.0.0.1:3000/<contact_id>
+```
+
+The response should look like this:
+```
+BEGIN:VCARD
+VERSION:4.0
+FN:John Doe
+EMAIL:john@example.com
+TEL:123456789
+END:VCARD
+```
+
+The contacts are stored locally using the following:
+| Platform | Value | Example |
+| -------- | ----- | ------- |
+| Linux | `$XDG_DATA_HOME/dav` or `$HOME/.local/share/dav` | `/home/user/.local/share/dav` |
+| macOS | `$HOME/Library/Application Support/dav` | `/Users/Alice/Library/Application Support/dav` |
+| Windows | `{FOLDERID_RoamingAppData}\dav\data` | `C:\Users\User\AppData\Roaming\dav\data` |
