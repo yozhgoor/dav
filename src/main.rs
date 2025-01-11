@@ -6,13 +6,12 @@ use std::sync::Arc;
 use axum::{
     extract::{Path as AxumPath, State},
     http::StatusCode,
-    response::IntoResponse,
     routing::get,
     Json, Router,
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 const ADDR: &str = "127.0.0.1:3000";
 
@@ -49,7 +48,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/contacts", get(list_contacts).post(create_contact))
-        .route("/contacts/:id", get(contact_by_id))
+        .route("/contacts/:id", get(contact_by_id).delete(delete_contact))
         .with_state(Arc::new(state));
 
     let listener = match tokio::net::TcpListener::bind(ADDR).await {
@@ -100,6 +99,33 @@ async fn create_contact(
                 "failed to create file".to_string(),
             )
         }
+    }
+}
+
+async fn delete_contact(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, String) {
+    let mut file_path = state.data_dir.join(id);
+    file_path.set_extension("vcf");
+
+    if file_path.exists() {
+        match fs::remove_file(&file_path) {
+            Ok(_) => {
+                info!("Contact deleted: {}", file_path.display());
+                (StatusCode::OK, "Contact deleted".to_string())
+            }
+            Err(e) => {
+                error!("failed to delete contact {}: {}", file_path.display(), e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to delete contact".to_string(),
+                )
+            }
+        }
+    } else {
+        warn!("contact not found for deletion: {}", file_path.display());
+        (StatusCode::NOT_FOUND, "contact not found".to_string())
     }
 }
 
