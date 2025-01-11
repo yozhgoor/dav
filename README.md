@@ -27,6 +27,13 @@ curl -X POST http://127.0.0.1:3000/contacts \
     -d '{"id":"123", "name":"John Doe", "email":john@example.com", "phone":"123456789"}'
 ```
 
+### Delete a contact
+
+You can delete a contact using the following:
+```
+curl -X DELETE http://127.0.0.1:3000/contacts/<contact_id>
+```
+
 ### Retrieve a contact using his id
 
 To retrieve a contact, you can use the following:
