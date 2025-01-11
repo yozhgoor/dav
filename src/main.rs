@@ -1,6 +1,8 @@
+use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use axum::{
@@ -21,6 +23,50 @@ struct Contact {
     name: String,
     email: String,
     phone: String,
+}
+
+impl FromStr for Contact {
+    type Err = String;
+
+    fn from_str(vcard: &str) -> Result<Self, Self::Err> {
+        let mut id = None;
+        let mut name = None;
+        let mut email = None;
+        let mut phone = None;
+
+        for line in vcard.lines() {
+            if line.starts_with("ID:") {
+                id = Some(line.trim_start_matches("ID:").to_string());
+            } else if line.starts_with("FN:") {
+                name = Some(line.trim_start_matches("FN:").to_string());
+            } else if line.starts_with("EMAIL:") {
+                email = Some(line.trim_start_matches("EMAIL:").to_string());
+            } else if line.starts_with("TEL:") {
+                phone = Some(line.trim_start_matches("TEL:").to_string());
+            }
+        }
+
+        match (id.as_ref(), name.as_ref(), email.as_ref(), phone.as_ref()) {
+            (None, None, None, None) => Err("contact is empty".to_string()),
+            (None, _, _, _) => Err("contact ID is empty".to_string()),
+            _ => Ok(Contact {
+                id: id.unwrap_or_default(),
+                name: name.unwrap_or_default(),
+                email: email.unwrap_or_default(),
+                phone: phone.unwrap_or_default(),
+            }),
+        }
+    }
+}
+
+impl fmt::Display for Contact {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "BEGIN:VCARD\nVERSION:4.0\nID:{}\nFN:{}\nEMAIL:{}\nTEL:{}\nEND:VCARD\n",
+            self.id, self.name, self.email, self.phone
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -48,7 +94,12 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/contacts", get(list_contacts).post(create_contact))
-        .route("/contacts/:id", get(contact_by_id).delete(delete_contact))
+        .route(
+            "/contacts/:id",
+            get(contact_by_id)
+                .put(modify_contact)
+                .delete(delete_contact),
+        )
         .with_state(Arc::new(state));
 
     let listener = match tokio::net::TcpListener::bind(ADDR).await {
@@ -73,7 +124,8 @@ async fn create_contact(
     State(state): State<Arc<AppState>>,
     Json(contact): Json<Contact>,
 ) -> (StatusCode, String) {
-    let file_path = state.data_dir.join(contact.id);
+    let mut file_path = state.data_dir.join(contact.id);
+    file_path.set_extension("vcf");
 
     let vcard = format!(
         "BEGIN:VCARD\nVERSION:4.0\nFN:{}\nEMAIL:{}\nTEL:{}\nEND:VCARD\n",
@@ -97,6 +149,42 @@ async fn create_contact(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to create file".to_string(),
+            )
+        }
+    }
+}
+
+async fn modify_contact(
+    AxumPath(id): AxumPath<String>,
+    State(state): State<Arc<AppState>>,
+    Json(updated_contact): Json<Contact>,
+) -> (StatusCode, String) {
+    let mut file_path = state.data_dir.join(&id);
+    file_path.set_extension("vcf");
+
+    if !file_path.exists() {
+        warn!("contact not found for update: {}", file_path.display());
+        return (StatusCode::NOT_FOUND, "contact not found".to_string());
+    }
+
+    if id != updated_contact.id {
+        warn!("ID '{}' does not match body ID: {}", id, updated_contact.id);
+        return (
+            StatusCode::BAD_REQUEST,
+            "ID in URL and body must match".to_string(),
+        );
+    }
+
+    match fs::write(&file_path, updated_contact.to_string()) {
+        Ok(_) => {
+            info!("contact updated: {}", file_path.display());
+            (StatusCode::OK, "Contact updated".to_string())
+        }
+        Err(e) => {
+            error!("failed to update contact {}: {}", file_path.display(), e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to update contact".to_string(),
             )
         }
     }
@@ -133,7 +221,8 @@ async fn contact_by_id(
     AxumPath(id): AxumPath<String>,
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, String) {
-    let file_path = state.data_dir.join(id);
+    let mut file_path = state.data_dir.join(id);
+    file_path.set_extension("vcf");
 
     match fs::read_to_string(&file_path) {
         Ok(content) => {
@@ -156,19 +245,8 @@ async fn list_contacts(
             for entry in entries.filter_map(Result::ok) {
                 let path = entry.path();
 
-                let id = match path.file_stem().and_then(|stem| stem.to_str()) {
-                    Some(stem) => stem.to_string(),
-                    None => {
-                        error!("invalid file name: {}", path.display());
-                        return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "invalid file name".to_string(),
-                        ));
-                    }
-                };
-
                 if let Ok(content) = fs::read_to_string(&path) {
-                    if let Some(contact) = parse_vcard(id, content) {
+                    if let Ok(contact) = content.parse::<Contact>() {
                         contacts.push(contact);
                     }
                 }
@@ -184,31 +262,5 @@ async fn list_contacts(
                 "failed to list contacts".to_string(),
             ))
         }
-    }
-}
-
-fn parse_vcard(id: String, vcard: String) -> Option<Contact> {
-    let mut name = None;
-    let mut email = None;
-    let mut phone = None;
-
-    for line in vcard.lines() {
-        if line.starts_with("FN:") {
-            name = Some(line.trim_start_matches("FN:").to_string());
-        } else if line.starts_with("EMAIL:") {
-            email = Some(line.trim_start_matches("EMAIL:").to_string());
-        } else if line.starts_with("TEL:") {
-            phone = Some(line.trim_start_matches("TEL:").to_string());
-        }
-    }
-
-    match (name.as_ref(), email.as_ref(), phone.as_ref()) {
-        (None, None, None) => None,
-        _ => Some(Contact {
-            id,
-            name: name.unwrap_or_default(),
-            email: email.unwrap_or_default(),
-            phone: phone.unwrap_or_default(),
-        }),
     }
 }
