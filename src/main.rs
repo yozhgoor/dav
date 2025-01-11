@@ -73,7 +73,7 @@ async fn health_check() -> StatusCode {
 async fn create_contact(
     State(state): State<Arc<AppState>>,
     Json(contact): Json<Contact>,
-) -> impl IntoResponse {
+) -> (StatusCode, String) {
     let file_path = state.data_dir.join(contact.id);
 
     let vcard = format!(
@@ -85,14 +85,20 @@ async fn create_contact(
         Ok(mut file) => {
             if let Err(e) = file.write_all(vcard.as_bytes()) {
                 error!("Error writing to file: {}", e);
-                return (StatusCode::INTERNAL_SERVER_ERROR, "failed to save contact");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to save contact".to_string(),
+                );
             }
 
-            (StatusCode::CREATED, "Contact created")
+            (StatusCode::CREATED, "Contact created".to_string())
         }
         Err(e) => {
             error!("failed to create file at {}: {}", file_path.display(), e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "failed to create file")
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to create file".to_string(),
+            )
         }
     }
 }
@@ -100,7 +106,7 @@ async fn create_contact(
 async fn contact_by_id(
     AxumPath(id): AxumPath<String>,
     State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+) -> (StatusCode, String) {
     let file_path = state.data_dir.join(id);
 
     match fs::read_to_string(&file_path) {
