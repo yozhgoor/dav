@@ -31,7 +31,7 @@ curl -X POST http://127.0.0.1:3000/contacts \
 
 To retrieve a contact, you can use the following:
 ```
-curl http://127.0.0.1:3000/<contact_id>
+curl http://127.0.0.1:3000/contacts/<contact_id>
 ```
 
 The response should look like this:
@@ -43,6 +43,17 @@ EMAIL:john@example.com
 TEL:123456789
 END:VCARD
 ```
+
+### List all the contacts
+
+To get the contact list, you can use the following:
+```
+curl http://127.0.0.1:3000/contacts
+```
+
+The response should be a JSON array with all the available contacts.
+
+## Local storage
 
 The contacts are stored locally using the following:
 | Platform | Value | Example |
