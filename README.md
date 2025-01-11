@@ -51,7 +51,17 @@ To get the contact list, you can use the following:
 curl http://127.0.0.1:3000/contacts
 ```
 
-The response should be a JSON array with all the available contacts.
+The response should be a JSON array with all the available contacts like this:
+```json
+[
+  {
+    "id": "123",
+    "name": "John Doe",
+    "email": "john@example.com",
+    "phone": "123-456-789",
+  },
+]
+```
 
 ## Local storage
 
