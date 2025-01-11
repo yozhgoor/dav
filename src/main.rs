@@ -1,5 +1,3 @@
-use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -12,6 +10,8 @@ use axum::{
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use tokio::{fs, io::AsyncWriteExt};
+use tracing::{error, info};
 
 const ADDR: &str = "127.0.0.1:3000";
 
@@ -30,12 +30,16 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-    let base_path = ProjectDirs::from("", "", "dav").expect("failed to determine base directories");
+    tracing_subscriber::fmt::init();
 
+    let base_path = ProjectDirs::from("", "", "dav").expect("failed to determine base directories");
     let data_dir = base_path.data_dir().join("contacts");
 
-    fs::create_dir_all(&data_dir).expect("failed to create contact directory");
-    println!("Data directory created at: {}", data_dir.display());
+    if let Err(e) = tokio::fs::create_dir_all(&data_dir).await {
+        error!("failed to create contact directory: {}", e);
+        return;
+    }
+    info!("Data directory created at: {}", data_dir.display());
 
     let state = AppState {
         data_dir: Arc::new(data_dir),
@@ -47,14 +51,18 @@ async fn main() {
         .route("/contacts", post(create_contact))
         .with_state(Arc::new(state));
 
-    let listener = tokio::net::TcpListener::bind(ADDR)
-        .await
-        .expect("failed to bind to address");
+    let listener = match tokio::net::TcpListener::bind(ADDR).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            error!("failed to bind to address {}: {}", ADDR, e);
+            return;
+        }
+    };
 
-    println!("Server running at http://{}", ADDR);
-    axum::serve(listener, app)
-        .await
-        .expect("failed to run server");
+    info!("Server running at http://{}", ADDR);
+    if let Err(e) = axum::serve(listener, app).await {
+        error!("failed to run server: {}", e);
+    }
 }
 
 async fn health_check() -> StatusCode {
@@ -72,10 +80,10 @@ async fn create_contact(
         contact.name, contact.email, contact.phone
     );
 
-    match fs::File::create(&file_path) {
+    match fs::File::create(&file_path).await {
         Ok(mut file) => {
-            if let Err(e) = file.write_all(vcard.as_bytes()) {
-                eprintln!("Error writing to file: {}", e);
+            if let Err(e) = file.write_all(vcard.as_bytes()).await {
+                error!("Error writing to file: {}", e);
                 return (StatusCode::INTERNAL_SERVER_ERROR, "failed to save contact");
             }
 
@@ -91,7 +99,7 @@ async fn contact_by_id(
 ) -> impl IntoResponse {
     let file_path = format!("{}/{}.vcf", state.data_dir.display(), id);
 
-    match fs::read_to_string(&file_path) {
+    match fs::read_to_string(&file_path).await {
         Ok(content) => (StatusCode::OK, content),
         Err(_) => (StatusCode::NOT_FOUND, "Contact not found".to_string()),
     }
