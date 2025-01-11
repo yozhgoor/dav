@@ -1,6 +1,4 @@
 use std::fmt;
-use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -13,6 +11,8 @@ use axum::{
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use tokio::{fs, io::AsyncWriteExt};
+use tokio_stream::{wrappers::ReadDirStream, StreamExt};
 use tracing::{error, info, warn};
 
 const ADDR: &str = "127.0.0.1:3000";
@@ -81,7 +81,7 @@ async fn main() {
     let base_path = ProjectDirs::from("", "", "dav").expect("failed to determine base directories");
     let data_dir = base_path.data_dir().join("contacts");
 
-    if let Err(e) = fs::create_dir_all(&data_dir) {
+    if let Err(e) = fs::create_dir_all(&data_dir).await {
         error!("failed to create contact directory: {}", e);
         return;
     }
@@ -132,9 +132,9 @@ async fn create_contact(
         contact.name, contact.email, contact.phone
     );
 
-    match fs::File::create(&file_path) {
+    match fs::File::create(&file_path).await {
         Ok(mut file) => {
-            if let Err(e) = file.write_all(vcard.as_bytes()) {
+            if let Err(e) = file.write_all(vcard.as_bytes()).await {
                 error!("Error writing to file: {}", e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -175,7 +175,7 @@ async fn modify_contact(
         );
     }
 
-    match fs::write(&file_path, updated_contact.to_string()) {
+    match fs::write(&file_path, updated_contact.to_string()).await {
         Ok(_) => {
             info!("contact updated: {}", file_path.display());
             (StatusCode::OK, "Contact updated".to_string())
@@ -198,7 +198,7 @@ async fn delete_contact(
     file_path.set_extension("vcf");
 
     if file_path.exists() {
-        match fs::remove_file(&file_path) {
+        match fs::remove_file(&file_path).await {
             Ok(_) => {
                 info!("Contact deleted: {}", file_path.display());
                 (StatusCode::OK, "Contact deleted".to_string())
@@ -224,7 +224,7 @@ async fn contact_by_id(
     let mut file_path = state.data_dir.join(id);
     file_path.set_extension("vcf");
 
-    match fs::read_to_string(&file_path) {
+    match fs::read_to_string(&file_path).await {
         Ok(content) => {
             info!("Contact found at {}", file_path.display());
             (StatusCode::OK, content)
@@ -239,20 +239,28 @@ async fn contact_by_id(
 async fn list_contacts(
     State(state): State<Arc<AppState>>,
 ) -> Result<(StatusCode, Json<Vec<Contact>>), (StatusCode, String)> {
-    match fs::read_dir(&*state.data_dir) {
-        Ok(entries) => {
+    match tokio::fs::read_dir(&*state.data_dir).await {
+        Ok(read_dir) => {
             let mut contacts = Vec::new();
-            for entry in entries.filter_map(Result::ok) {
-                let path = entry.path();
+            let mut dir_stream = ReadDirStream::new(read_dir);
 
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(contact) = content.parse::<Contact>() {
-                        contacts.push(contact);
+            while let Some(entry) = dir_stream.next().await {
+                match entry {
+                    Ok(entry) => {
+                        let path = entry.path();
+                        if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                            if let Ok(contact) = content.parse::<Contact>() {
+                                contacts.push(contact);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to read directory entry: {}", e);
                     }
                 }
             }
 
-            info!("Contacts list created successfully");
+            info!("Contact list created successfully");
             Ok((StatusCode::OK, Json(contacts)))
         }
         Err(e) => {
